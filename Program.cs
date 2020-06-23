@@ -1,4 +1,6 @@
-﻿using System;
+﻿
+
+using System;
 using System.IO;
 using System.Configuration;
 using System.Data;
@@ -13,14 +15,20 @@ namespace gk.LDSExportTools
 {
     class Program
     {
+        private const string ActionImporter = "importer";
+        private const string ActionFeature = "feature";
+        private const string ActionMeta = "meta";
+        private const string ActionProc = "proc";
         static string ServerName = "";
         static string IntegratedSecurity = "";
         static string User = "";
         static string Password = "";
         static string DataBaseName = "";
-        static string ImporterName = "";
-        static string Action = "importer";
-        static bool full = false;
+        static string ObjectName = "";
+        static string Action = "";
+        static string DefaultOutput = "Export.sql";
+        static string Output = DefaultOutput;
+
         static bool show_help = false;
         public static void Main(string[] args)
         {
@@ -28,15 +36,14 @@ namespace gk.LDSExportTools
             try
             {
                 OptionSet p = new OptionSet() {
-                { "f|full", "Use default scheme of scripting.", v => full = v != null },
                 { "s|srv=", "Server name.", value => ServerName = value },
                 { "a|aut=", "IntegratedSecurity (true|false).", value => IntegratedSecurity = value },
                 { "u|usr=", "SQL user name.",  value => User = value },
                 { "p|pwd=", "SQL passwor.", value => Password = value },
                 { "d|db=", "Database name.", value => DataBaseName = value },
-                { "i|imp=", "Importer mask.", value => ImporterName = value },
-                { "t|type=", "Type action.", value => Action = value },
-
+                { "n|name=", "Mask of name export object.", value => ObjectName = value },
+                { "t|type=", "Type action. importer|feature|meta|proc", value => Action = value },
+                { "o|output=", "Name of output file, default Export.sql", value => Output = value },
                 { "h|help", "Show this message and exit.", v => show_help = v != null },
             };
                 p.Parse(args);
@@ -57,6 +64,9 @@ namespace gk.LDSExportTools
             Console.WriteLine("Usage: i-lds-imp-exp [OPTIONS]");
             Console.WriteLine("Export importer from db I-LDS");
             Console.WriteLine();
+            Console.WriteLine("Example:");
+            Console.WriteLine();
+            Console.WriteLine("gk.LDSExportTools.exe -t proc -s 192.168.37.40\\MSSQL2014 -u sa -p strongpassword -a false -d \"I - LDS RN UOS\" -n TechSync -o Script.sql");
             Console.WriteLine("Options:");
             p.WriteOptionDescriptions(Console.Out);
         }
@@ -74,7 +84,6 @@ namespace gk.LDSExportTools
             {
                 Console.WriteLine("ServerName: {0}", ServerName);
             }
-
             Server myServer = new Server(ServerName);
             try
             {
@@ -153,9 +162,9 @@ namespace gk.LDSExportTools
                     Console.WriteLine("DataBaseName: {0}", DataBaseName);
                 }
 
-                Database myAdventureWorks = myServer.Databases[DataBaseName];
+                Database dbLds = myServer.Databases[DataBaseName];
 
-                if (myAdventureWorks == null)
+                if (dbLds == null)
                 {
                     Console.Write("DB not Exist [" + DataBaseName + "]: ");
                 }
@@ -168,42 +177,34 @@ namespace gk.LDSExportTools
                         catch { throw; }
                     }
 
-
-                    if (Action == "importer")
+                    if (string.IsNullOrEmpty(Action))
                     {
-                        if (full)
-                        {
-                            string sql = "";
-                            //Создаем экземпляр класса, который будет генерировать скрипты
-                            Scripter scripter = new Scripter(myServer);
-                            scripter.Options.ScriptDrops = false;
-                            scripter.Options.ScriptSchema = false;
-                            scripter.Options.ScriptData = true;
-                            foreach (Table table in myAdventureWorks.Tables)
-                            {
-                                if (table.Name.Contains("Importer"))
-                                {
-                                    Console.WriteLine(table.Name);
-                                    foreach (string current2 in scripter.EnumScript(new Urn[] { table.Urn }))
-                                    {
-                                        sql += current2 + "\r\nGO\r\n";
-                                    }
-                                    File.WriteAllText(path + "\\" + DataBaseName + "Importers.sql", sql);
-                                }
-                            }
-                        }
-                        else
-                            ImporterSql(myAdventureWorks, path);
+                        string DefaultAction = ConfigurationManager.AppSettings["DefaultAction"].ToString();
+                        Console.Write("Action (importer|feature|meta|proc) [{0}]: ", DefaultAction);
+                        Action = Console.ReadLine();
+                        Action = (string.IsNullOrEmpty(Password)) ? DefaultAction : Action;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Action: {0}", Password);
                     }
 
-                    if (Action == "report")
-                    {
-                        ReportSql(myAdventureWorks, path);
-                    }
 
-                    if (Action == "meta")
+                    if (Action == ActionImporter)
                     {
-                        MetaObjectSql(myAdventureWorks, path);
+                        ImporterSql(dbLds, path);
+                    }
+                    else if (Action == ActionFeature)
+                    {
+                        FeatureNodeSql(dbLds, path);
+                    }
+                    else if (Action == ActionMeta)
+                    {
+                        MetaObjectSql(dbLds, path);
+                    }
+                    else if (Action == ActionProc)
+                    {
+                        ProcedureAndObject(myServer, dbLds, path);
                     }
                 }
             }
@@ -216,12 +217,100 @@ namespace gk.LDSExportTools
             myServer.ConnectionContext.Disconnect();
         }
 
+        public static void ProcedureAndObject(Server myServer, Database myAdventureWorks, string path)
+        {
+            string sql = "";
+
+            Console.Write("Procedure name like: ");
+            string ObjName;
+            if (string.IsNullOrEmpty(ObjectName))
+            {
+                ObjName = Console.ReadLine();
+            }
+            else
+            {
+                ObjName = ObjectName;
+                Console.WriteLine(ObjectName);
+            }
+
+            //Создаем экземпляр класса, который будет генерировать скрипты
+            Scripter scripter = new Scripter(myServer);
+
+
+
+            foreach (StoredProcedure proc in myAdventureWorks.StoredProcedures)
+            {
+                sql = "";
+                if (proc.Name.Contains(ObjName))
+                {
+                    Console.WriteLine(proc.Name);
+                    scripter.Options.ScriptDrops = true;
+
+                    foreach (string current2 in scripter.EnumScript(new Urn[] { proc.Urn }))
+                    {
+                        sql += current2 + "\r\nGO\r\n";
+                    }
+                    scripter.Options.ScriptDrops = false;
+
+                    foreach (string current2 in scripter.EnumScript(new Urn[] { proc.Urn }))
+                    {
+                        sql += current2 + "\r\nGO\r\n";
+                    }
+
+                    scripter.Options.IncludeHeaders = true;
+                    scripter.Options.SchemaQualify = true;
+
+                    string fPath = string.Format("{0}{1}", path, Output);
+                    //try { File.Delete(fPath); } catch { }
+                    File.AppendAllText(fPath, sql, System.Text.Encoding.UTF8);
+                }
+            }
+
+            foreach (UserDefinedFunction func in myAdventureWorks.UserDefinedFunctions)
+            {
+                sql = "";
+                string objName = func.ToString();
+                if (objName.Contains(ObjName))
+                {
+                    Console.WriteLine(objName);
+                    scripter.Options.ScriptDrops = true;
+
+                    foreach (string current2 in scripter.EnumScript(new Urn[] { func.Urn }))
+                    {
+                        sql += current2 + "\r\nGO\r\n";
+                    }
+                    scripter.Options.ScriptDrops = false;
+
+                    foreach (string current2 in scripter.EnumScript(new Urn[] { func.Urn }))
+                    {
+                        sql += current2 + "\r\nGO\r\n";
+                    }
+
+                    scripter.Options.IncludeHeaders = true;
+                    scripter.Options.SchemaQualify = true;
+
+                    string fPath = string.Format("{0}{1}", path, Output);
+                    File.AppendAllText(fPath, sql, System.Text.Encoding.UTF8);
+                }
+            }
+        }
+
         private static void MetaObjectSql(Database myAdventureWorks, string path)
         {
 
             string text = "";
             Console.Write("MetaObject name like: ");
-            string ObjName = Console.ReadLine();
+            string ObjName;
+            if (string.IsNullOrEmpty(ObjectName))
+            {
+                ObjName = Console.ReadLine();
+            }
+            else
+            {
+                ObjName = ObjectName;
+                Console.WriteLine(ObjectName);
+            }
+
             //(Отчет) Журнал некондиционных продуктов
             string tblName = "MetaObject";
             string sql = string.Format(@"SELECT * FROM [dbo].[MetaObject] WHERE [Name] like '%{0}%'", ObjName);
@@ -265,19 +354,28 @@ GO
 
 
             }
-            string fPath = string.Format("{0}{1}({2}).sql", path, "Export", "");
-            try { File.Delete(fPath); } catch { }
+            string fPath = string.Format("{0}{1}", path, Output);
+            //try { File.Delete(fPath); } catch { }
             File.AppendAllText(fPath, text);
 
         }
 
-        private static void ReportSql(Database myAdventureWorks, string path)
+        private static void FeatureNodeSql(Database myAdventureWorks, string path)
         {
 
             string text = "";
-            Console.Write("Report name like: ");
-            string ReportName = Console.ReadLine();
-            //(Отчет) Журнал некондиционных продуктов
+            Console.Write("FeatureNode name like: ");
+            string ReportName;
+            if (string.IsNullOrEmpty(ObjectName))
+            {
+                ReportName = Console.ReadLine();
+            }
+            else
+            {
+                ReportName = ObjectName;
+                Console.WriteLine(ObjectName);
+            }
+
             string tblName = "FeatureNode";
             string sql = string.Format(@"SELECT [FeatureNodeId]
       ,[FeatureTypeId]
@@ -290,21 +388,20 @@ GO
             ds.Tables[0].TableName = tblName;
             foreach (DataRow row in ds.Tables[0].Rows)
             {
-                //text = "";
                 string id = row["FeatureNodeId"].ToString();
                 string name = row["Name"].ToString();
                 Console.WriteLine("Exporting report: {0}", name);
 
-                text += GenerateSql(row, "") + "\r\n\r\n";
+                text += GenerateSqlWithDelete(row, "") + "\r\n\r\n";
                 text += NotRefTableSql(myAdventureWorks, "FeatureNodeRights", "FeatureNodeId", id);
                 text += NotRefTableSql(myAdventureWorks, "FeatureNodeContent", "FeatureNodeId", id);
                 text += NotRefTableSql(myAdventureWorks, "FeatureNodeGraphics", "FeatureNodeId", id);
+                text += "\r\nGO\r\n";
                 name = deleteProhibitedСharacter(name);
-
             }
-
-            string fPath = string.Format("{0}{1}.sql", path, "FeatureNodeExport");
-            try { File.Delete(fPath); } catch { }
+            //if (Output == DefaultOutput)
+            string fPath = string.Format("{0}{1}", path, Output);
+            //try { File.Delete(fPath); } catch { }
             File.AppendAllText(fPath, text);
 
         }
@@ -315,19 +412,19 @@ GO
             {
                 string text = "";
                 string DefaultImporterName = ConfigurationManager.AppSettings["DefaultImporterName"].ToString();
-                if (string.IsNullOrEmpty(ImporterName))
+                if (string.IsNullOrEmpty(ObjectName))
                 {
                     Console.Write("Importer name like  [{0}]: ", DefaultImporterName);
-                    ImporterName = Console.ReadLine();
-                    ImporterName = (string.IsNullOrEmpty(ImporterName)) ? DefaultImporterName : ImporterName;
+                    ObjectName = Console.ReadLine();
+                    ObjectName = (string.IsNullOrEmpty(ObjectName)) ? DefaultImporterName : ObjectName;
                 }
                 else
                 {
-                    Console.WriteLine("Importer name like: {0}", ImporterName);
+                    Console.WriteLine("Importer name like: {0}", ObjectName);
                 }
 
                 string tblName = "Importer";
-                string sql = string.Format("select * from [{0}] where Name like '%{1}%'", tblName, ImporterName);
+                string sql = string.Format("select * from [{0}] where Name like '%{1}%'", tblName, ObjectName);
                 DataSet ds = myAdventureWorks.ExecuteWithResults(sql);
                 ds.Tables[0].TableName = tblName;
                 foreach (DataRow row in ds.Tables[0].Rows)
@@ -341,6 +438,54 @@ GO
                     text += ImporterInstancerSql(myAdventureWorks, "ImporterInstance", "ImporterUid", id);
                     text += ImporterTestSql(myAdventureWorks, "ImporterTest", "ImporterUid", id);
                     name = deleteProhibitedСharacter(name);
+
+                    string fPath = string.Format("{0}{1}", path, Output);
+                    //try { File.Delete(fPath); } catch { }
+                    File.AppendAllText(fPath, sql, System.Text.Encoding.UTF8);
+                }
+                return text;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                Console.WriteLine(ex.StackTrace);
+                return "";
+            }
+        }
+
+        public static string TechSyncSql(Database myAdventureWorks, string path)
+        {
+            try
+            {
+                string text = "";
+                string DefaultImporterName = ConfigurationManager.AppSettings["DefaultImporterName"].ToString();
+                if (string.IsNullOrEmpty(ObjectName))
+                {
+                    Console.Write("Importer name like  [{0}]: ", DefaultImporterName);
+                    ObjectName = Console.ReadLine();
+                    ObjectName = (string.IsNullOrEmpty(ObjectName)) ? DefaultImporterName : ObjectName;
+                }
+                else
+                {
+                    Console.WriteLine("Importer name like: {0}", ObjectName);
+                }
+
+                string tblName = "Importer";
+                string sql = string.Format("select * from [{0}] where Name like '%{1}%'", tblName, ObjectName);
+                DataSet ds = myAdventureWorks.ExecuteWithResults(sql);
+                ds.Tables[0].TableName = tblName;
+                foreach (DataRow row in ds.Tables[0].Rows)
+                {
+                    text = "";
+                    string id = row["ImporterUid"].ToString();
+                    string name = row["Name"].ToString();
+                    Console.WriteLine("Exporting importer: {0}", name);
+
+                    text += GenerateSql(row, "") + "\r\n\r\n";
+                    text += ImporterInstancerSql(myAdventureWorks, "ImporterInstance", "ImporterUid", id);
+                    text += ImporterTestSql(myAdventureWorks, "ImporterTest", "ImporterUid", id);
+                    name = deleteProhibitedСharacter(name);
+
                     string fPath = string.Format("{0}{1}({2}).sql", path, name, id);
                     try { File.Delete(fPath); } catch { }
                     File.AppendAllText(fPath, text);
@@ -354,6 +499,7 @@ GO
                 return "";
             }
         }
+
 
         static string deleteProhibitedСharacter(string s)
         {
@@ -405,7 +551,7 @@ GO
                 string text = "";
                 foreach (DataRow row in ds.Tables[0].Rows)
                 {
-                    text += GenerateSql(row, "") + "\r\n\r\n";
+                    text += GenerateSql(row, "") + "\r\nGO\r\n";
                 }
                 return text;
             }
@@ -423,6 +569,89 @@ GO
             string tblName = row.Table.TableName;
 
             string sql = string.Format("INSERT [dbo].[{0}] (", tblName);
+
+            foreach (DataColumn col in row.Table.Columns)
+            {
+                sql += string.Format("[{0}], ", col.Caption);
+            }
+
+            sql = sql.TrimEnd(new char[] { ' ', ',' });
+            sql += ") VALUES (";
+
+            foreach (DataColumn col in row.Table.Columns)
+            {
+                object o = row[col];
+                string s = o.ToString();
+                string _null = "null, ";
+                if (col.DataType == typeof(Guid))
+                {
+                    sql += (s != "") ? string.Format("N'{0}', ", o) : _null;
+                }
+                else if (col.DataType == typeof(String) || col.DataType == typeof(string))
+                {
+                    sql += (s != "") ? string.Format("N'{0}', ", s.Replace("'", "''")) : _null;
+                }
+                else if (col.DataType == typeof(Boolean))
+                {
+                    s = (s != "") ? (o.ToString() == "False") ? "0" : "1" : _null;
+                    sql += string.Format("{0}, ", s);
+                }
+                else if (col.DataType == typeof(Int32))
+                {
+                    sql += (s != "") ? string.Format("{0}, ", s) : _null;
+                }
+                else if (col.DataType == typeof(Double))
+                {
+                    sql += (s != "") ? string.Format("{0}, ", row[col]) : _null;
+                }
+                else if (col.DataType == typeof(byte[]))
+                {
+                    if (col.Caption.ToLower() == "rv")
+                    {
+                        sql += "default, ";
+                    }
+                    else
+                    {
+                        sql += (s != "") ? "0x" + BitConverter.ToString((byte[])row[col]).Replace("-", "") + ", " : _null;
+                    }
+                }
+            }
+            sql = sql.TrimEnd(new char[] { ' ', ',' });
+            sql += ")";
+            return sql;
+        }
+
+        public static string GenerateSqlWithDelete(DataRow row, string where)
+        {
+            string tblName = row.Table.TableName;
+
+            string sql = "";
+
+            sql += string.Format("DELETE FROM [dbo].[{0}] WHERE 1=1 ", tblName);
+
+            foreach (DataColumn col in row.Table.Columns)
+            {
+
+
+                object o = row[col];
+                string s = o.ToString();
+                string _null = "null ";
+                if (col.Caption.ToLower().EndsWith("id"))
+                {
+                    if (col.DataType == typeof(Guid))
+                    {
+                        sql += string.Format("AND [{0}] = {1}", col.Caption, (s != "") ? string.Format("N'{0}' ", o) : _null);
+                        //sql += ;
+                    }
+                    else if (col.DataType == typeof(Int32))
+                    {
+                        sql += string.Format("AND [{0}] = {1}", col.Caption, (s != "") ? string.Format("{0} ", s) : _null);
+                    }
+                }
+            }
+
+            sql += "\r\ngo\r\n";
+            sql += string.Format("INSERT [dbo].[{0}] (", tblName);
 
             foreach (DataColumn col in row.Table.Columns)
             {
